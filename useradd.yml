@@ -1,0 +1,10 @@
+---
+- name: playbook for user creation
+  hosts: all
+  tasks:
+    - name: user add
+      user:
+        name: rahul
+        comment: "Rahul Pimple"
+        password: rahul
+        
