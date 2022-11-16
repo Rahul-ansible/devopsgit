@@ -1,0 +1,17 @@
+---
+- name: Playbook for openssl version check
+  hosts: all
+  gather_facts: no
+  
+  tasks:
+    - name: Run Command
+      command: "openssl version"
+      register: res
+      ignore_errors: true
+
+    - name: Log the openssl version
+      set_fact:
+        job_note: "{{ inventory_hostname }}:{{ res.stdout }}"
+
+    - name: display output
+      debug: var=job_note

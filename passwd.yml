@@ -1,0 +1,41 @@
+---
+- name: Playbook for collecting /etc/passwd file from hosts
+  hosts: all
+  gather_facts: no
+  tasks:
+    - name: Run Command
+      command: "cat /etc/passwd"
+      register: res
+      ignore_errors: true
+
+    - name: copy output to file
+      copy:
+        content: "{{ res.stdout |replace('\\n', '\n') }}"
+        dest: "/tmp/{{ inventory_hostname }}.txt"
+      when: res.stdout|length > 1
+
+    - name: fetch files from remote hosts
+      fetch:
+        src: "/tmp/{{ inventory_hostname }}.txt"
+        dest: /tmp/workdir/{{ inventory_hostname }}.txt
+        flat: yes
+
+    - name: zip the files folder
+      archive:
+        path: /tmp/workdir/
+        dest: /tmp/workdir.zip
+        format: zip
+      delegate_to: server01
+
+    - name: send files to mail
+      mail:
+        host: smtp.gmail.com
+        port: 587
+        username: "rprahulpimple@gmail.com"
+        password: "efmxkcgizvfbtxpy"
+        subject: "Ansible-report- passwd "
+        body: "Hello, this is passwd file send from ansible"
+        to: mahesh.chaudhari@in.ncs-i.com,rahul.pimple@in.ncs-i.com
+        attach: "/tmp/workdir.zip"
+        charset: utf8
+      #delegate_to: localhost

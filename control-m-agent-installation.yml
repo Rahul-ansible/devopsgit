@@ -1,0 +1,342 @@
+---
+- name: ControlM agent copy & installation
+  hosts: all
+  gather_facts: yes
+  become: true
+  vars:
+    agent_bin_path: "/tmp/controlM"
+    file_name: DRKAI.9.0.20.200_Linux-x86_64.zip
+   # file_name_unzipped: DRKAI.9.0.20.200_Linux-x86_64
+    silent_file: GNP_BCC.xml
+    ctrlm_home_dir: "/controlm/ctmagent"
+    ctm_user: ctmagent
+    ctm_group: controlm
+    job_success_count: 0
+    job_fail_count: 0
+    job_note: []
+    incomplete_flag: false
+    timeStamp: "{{ lookup('pipe','TZ=Asia/Singapore date') }}" # timestamp for logging processes
+    host_zone: "intranet"
+
+  tasks:
+
+#    - name: Initiating report output variables
+#      set_fact:
+#        job_success_count: 0
+#        job_fail_count: 0
+#        job_note: []
+#        incomplete_flag: false
+
+    - name: Get Folder to unzip file
+      set_fact:
+        file_name_unzipped: "{{ file_name | split('.zip')| first }}"
+      tags:
+        - always
+        
+  # Pre-checks before installation of Control-M Agent package
+
+    - block:
+        - name: Check if controlM home directory is present ?
+          stat: 
+            path: "{{ ctrlm_home_dir }}"
+          register: home_dir
+          
+        - name: Check user home directory and shell
+          shell: "echo $HOME  && echo $SHELL"
+          become_user: "{{ctm_user}}"
+          register: res_home_shell
+                  
+        - name: Check user home directory and shell
+          debug: var=res_home_shell.stdout_lines
+      
+        - name: Log user home directory and shell
+          set_fact:
+            job_note: "{{job_note}} + [ '{{ timeStamp }}: [{{ inventory_hostname }}]: PRECHECK - {{  res_home_shell.stdout_lines|join() }}']"
+      tags:
+        - always
+        
+    - name: Check if controlM ctm directory is present ?
+      stat: 
+        path: "{{ ctrlm_home_dir }}/ctm"
+      register: pre_ctm_dir
+      tags:
+        - always
+
+    - name: Check if installed-versions.txt exists ?
+      tags: pre_check
+      block:
+        - name: check if installed-versions.txt is present before installation
+          debug:
+            msg:  "{{ ctrlm_home_dir }}/ctm path already exists.."
+
+        - name: Log if path exists
+          set_fact:
+            job_note: "{{job_note}} + [ '{{ timeStamp }}: [{{ inventory_hostname }}]: PRECHECK - {{ ctrlm_home_dir }}/ctm path already exists.']"
+         
+        - name: Check if installed-versions.txt is present
+          stat:
+            path: "{{ ctrlm_home_dir }}/installed-versions.txt"
+          register: pre_version_file
+
+        - name: Log installed-versions.txt status 
+          block:
+            - name: check if installed-versions.txt is present before installation
+              debug:
+                msg:  "HALTED : {{ ctrlm_home_dir }}/installed-versions.txt file already exists, server will be skipped for installation.."
+            - name: Log if path exists
+              set_fact:
+                job_note: "{{job_note}} + [ '{{ timeStamp }}: [{{ inventory_hostname }}]: HALTED - {{ ctrlm_home_dir }}/installed-versions.txt file already exists, server will be skipped for installation..']"
+          when: pre_version_file.stat.exists
+
+        - name: "Check if pstree package is installed or not"
+          command: which pstree
+          register: package_check
+          ignore_errors: true
+
+        - name: "Print if pstree is installed"
+          debug:
+            msg: "Package pstree is installed"
+          when: package_check.rc==0
+
+        - name: Log if pstree is installed
+          set_fact:
+            job_note: "{{job_note}} + [ '{{ timeStamp }}: [{{ inventory_hostname }}]: PRECHECK - Package pstree is installed..']"
+          when: package_check.rc==0
+
+        - name: "Print if pstree is not installed"
+          debug:
+            msg: "Package pstree is not installed"
+          when: package_check.rc!=0
+
+        - name: Log if pstree is not installed
+          set_fact:
+            job_note: "{{job_note}} + [ '{{ timeStamp }}: [{{ inventory_hostname }}]: PRECHECK - Package pstree is not installed..']"
+          when: package_check.rc!=0
+
+        - name: Check disk space of /controlm/ctmagent
+          command: "df -kh {{ ctrlm_home_dir }}"
+          register: disk_space
+        - debug: var=disk_space.stdout_lines
+
+        - name: Log user home directory and shell
+          set_fact:
+            job_note: "{{job_note}} + [ '{{ timeStamp }}: [{{ inventory_hostname }}]: PRECHECK - {{ disk_space.stdout_lines | join() }}']"
+
+      when: home_dir.stat.exists
+
+ 
+    - name: Do installation if pre-check is good.
+      tags: install_agent
+      block: 
+        - name: Copy ControlM Agent
+          unarchive:
+            src: "{{agent_bin_path}}/{{file_name}}"     
+            dest: "{{ ctrlm_home_dir }}"
+            mode: '0750'
+            owner: "{{ctm_user}}"
+            group: "{{ctm_group}}"
+          #become_user: "{{ctm_user}}"
+          
+        - name: Change the ownership
+          file:
+            path: "{{ ctrlm_home_dir }}/{{ file_name_unzipped }}" 
+            state: directory
+            owner: "{{ctm_user}}"
+            group: "{{ctm_group}}"
+            mode: '0750'
+            recurse: yes
+
+            
+       # - name: Install pstree if not present on server
+       #   yum:
+       #     name:"{{agent_bin_path}}/pstree{{rhel_version}}.rpm"
+       #     state: present
+       #   when: package_check.rc != 0   
+      
+        - name: Copy ControlM Agent Silent Installation File
+          copy:
+            src: "{{agent_bin_path}}/{{silent_file}}"  
+            dest: "{{ ctrlm_home_dir }}"
+            mode: 0750
+            owner: "{{ctm_user}}"
+            group: "{{ctm_group}}"
+            
+        - name: Change the ownership of {{silent_file}}
+          file:
+            path: "{{ ctrlm_home_dir }}/{{silent_file}}" 
+            owner: "{{ctm_user}}"
+            group: "{{ctm_group}}"
+            mode: '0750'
+           
+        - name: Run script using Silent Installation File
+          shell: 
+            cmd: "{{ ctrlm_home_dir }}/{{file_name_unzipped}}/setup.sh -silent {{ ctrlm_home_dir }}/{{silent_file}}"
+            chdir: "{{ctrlm_home_dir}}"                           
+          become_user: "{{ctm_user}}"  
+          ignore_errors: true      
+          register: res_install
+         
+      
+        - name: Setup Agent Mode
+          shell: 
+            #cmd: "{{ ctrlm_home_dir }}/ctm/scripts/set_agent_mode -u ctmagent -o 3 -r Y"
+            cmd: "/usr/bin/sudo -iu {{ctm_user}} {{ ctrlm_home_dir }}/ctm/scripts/set_agent_mode -u {{ctm_user}} -o 3 -r Y"
+            chdir: "{{ ctrlm_home_dir }}"
+          #become_user: "{{ctm_user}}"
+          register: res_setup 
+          ignore_errors: true                         
+          when: res_install.rc == 0
+          
+
+
+        - name: SUCCESS - Installation done successfully.
+          set_fact:
+            job_note: "{{job_note}} + [ '{{ timeStamp }}: [{{ inventory_hostname }}]: SUCCESS - Installation done successfully.']"
+          when: res_setup.rc == 0
+
+        - name: FAILED - Installation failed.
+          set_fact:
+            job_note: "{{job_note}} + [ '{{ timeStamp }}: [{{ inventory_hostname }}]: FAILED - Installation failed, Please check logs.']"
+            incomplete_flag: true
+          when: res_setup.rc != 0
+            
+        - name: Remove Agent installer Files & Folders
+          file:
+            path: "{{ item }}"
+            state: absent
+          ignore_errors: yes # To Do : Mahaveer - remove this later
+          with_items:
+             - "{{ ctrlm_home_dir }}/FORMS"
+             - "{{ ctrlm_home_dir }}/CheckReq"
+             - "{{ ctrlm_home_dir }}/Setup_files"
+             - "{{ ctrlm_home_dir }}/setup.sh"
+             - "{{ ctrlm_home_dir }}/{{silent_file}}"
+             - "{{ ctrlm_home_dir }}/ctm/toolbox/Usage_Measurement.jar"    
+          
+      when:
+         - home_dir.stat.exists
+         - not pre_ctm_dir.stat.exists
+         - not pre_version_file.stat.exists
+       
+
+# Post_checks if the package is correctly installed.
+    - name: DO post-check after successful installation
+      tags: post_check
+      block:  
+        - name: Check if ctm directory created after package installations 
+          stat:
+            path: "{{ ctrlm_home_dir }}/ctm"
+          register: post_ctm_dir
+    
+        - block:          
+            - name: Log Post-check path
+              debug:
+                msg:  "POST CHECK: {{ ctrlm_home_dir }}/ctm path exists.."
+    
+            - name: Log if path exists
+              set_fact:
+                job_note: "{{job_note}} + [ '{{ timeStamp }}: [{{ inventory_hostname }}]: POST_CHECK - {{ ctrlm_home_dir }}/ctm path exists..']"
+             
+            - name: Check if installed-versions.txt is present
+              stat:
+                path: "{{ ctrlm_home_dir }}/installed-versions.txt"
+              register: post_version_file
+    
+            - name: Log installed-versions.txt status 
+              block:
+                - name: check if installed-versions.txt is present after installation
+                  debug:
+                    msg:  "POST CHECK: {{ ctrlm_home_dir }}/installed-versions.txt file exists now."
+                - name: Log if path exists
+                  set_fact:
+                    job_note: "{{job_note}} + [ '{{ timeStamp }}: [{{ inventory_hostname }}]: POST_CHECK - {{ ctrlm_home_dir }}/installed-versions.txt file exists now.']"
+    
+                - name: Execute ag_diag_comm command to ensure ControlM agent is running.
+                  shell: "/usr/bin/sudo -iu {{ctm_user}} {{ ctrlm_home_dir }}/ctm/scripts/ag_diag_comm"
+                  #shell: |
+                  #  source .cshrc
+                  #  ctm/scripts/ag_diag_comm
+                  #args:
+                  #  chdir: "{{ ctrlm_home_dir }}"
+                  #become_user: "{{ctm_user}}"
+                  ignore_errors: true                   
+                  register: res_ag_diag_comm
+    
+                - name: Produce ag_diag_comm output
+                  debug: var=res_ag_diag_comm.stdout_lines
+                  #when: res_ag_diag_comm.rc == 0
+                - name: Produce ag_diag_comm output
+                  set_fact:
+                    job_note: "{{job_note}} + [ '{{ timeStamp }}: [{{ inventory_hostname }}]: POST_CHECK - {{ res_ag_diag_comm.stdout_lines | join(' ') }}']"
+                  when: res_ag_diag_comm.rc == 0
+                  
+                    
+               # - name: Check user home directory and shell # To Do :
+               #   set_fact:
+               #     home: "{{ lookup('env', 'HOME') }}"
+               #     shell: "{{ lookup('env', 'SHELL') }}"
+
+                - name: Check if SUDO_ENABLED is Y
+                  shell: "cat {{ ctrlm_home_dir }}/ctm/data/OS.dat | grep SUDO_ENABLED"
+                  register: sudo_enabled
+                - debug: var=sudo_enabled.stdout_lines
+
+                - name: Log SUDO_ENABLED output
+                  set_fact:
+                    job_note: "{{job_note}} + [ '{{ timeStamp }}: [{{ inventory_hostname }}]: POST_CHECK - {{ sudo_enabled.stdout_lines }}']"
+     
+              when: post_version_file.stat.exists
+         
+          when: post_ctm_dir.stat.exists     
+
+      when: 
+        - res_setup.rc is defined 
+        - res_setup.rc == 0
+
+
+
+    - name: DO post-check after successful installation
+      tags: always
+      block:
+        - name: Consolidate the final report - forloop
+          debug: 
+            msg: >-
+              {% for item in job_note %}
+               LOG: {{ item }}
+              {% endfor %}
+              
+        - name: Consolidate the final report  - join      
+          debug: 
+            msg: "{{ job_note | join('\n') }}"
+            
+        - name: Consolidate the final report - json
+          debug: 
+            msg: "{{ job_note | to_nice_json }}"
+            
+        - name: Consolidate the final report - json with indent
+          debug: 
+            msg: "{{ job_note | to_nice_json(indent=2) }}"          
+            
+        - name: Consolidate the final report - yaml
+          debug: 
+            msg: "{{ job_note | to_nice_yaml }}"
+            
+                
+        - name: Processing job results
+          set_fact:
+            job_results:
+              key: "{{ inventory_hostname }}"
+              value:
+                job_success_count: "{{ job_success_count|int }}"
+                job_fail_count: "{{ job_fail_count|int }}"
+                job_note: "{{ job_note }}"
+                incomplete_flag: "{{ incomplete_flag|bool }}"
+                
+        - name: Generate and add job results to a zone_hosts variable dictionary for each zone
+          set_stats:
+            data:
+              zone_hosts_{{ host_zone }}: "{{ hostvars[inventory_hostname]['zone_hosts_'~host_zone] | default({}) | combine({job_results.key:job_results.value}) }}"
+                
+        - name: Printing job status
+          debug:
+            msg: "{{ job_results}}"

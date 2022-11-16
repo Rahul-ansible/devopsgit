@@ -1,0 +1,48 @@
+---
+- name: Fixing SSH Weak Key Exchange Algorithms, Cipher Block Chaining (CBC), and MACs Enabled
+  hosts: all
+  become: true
+
+  tasks:
+    # First, change attributes of the ssh config file to allow changes
+    - name: Unlock the sshd configuration file
+      command: chattr -i /etc/ssh/sshd_config
+
+    # Do some housekeeping and remove any existing SSH cipher, kexalgorithm, and MAC entries
+    - name: Removing old KexAlgorithms entry from the sshd configuration file
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        state: absent
+        regexp: '^KexAlgorithms'
+
+    - name: Removing old Ciphers entry from the sshd configuration file
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        state: absent
+        regexp: '^Ciphers'
+
+    - name: Removing old MACs entry from the sshd configuration file
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        state: absent
+        regexp: '^MACs'
+
+    # Add the new entries to the end of the sshd_config file
+    - name: Adding new SSH Ciphers entry to the [sshd_config] file
+      shell: echo "Ciphers aes128-ctr,aes192-ctr,aes256-ctr" >> /etc/ssh/sshd_config
+
+    - name: Adding new SSH KexAlgorithms entry to the [sshd_config] file
+      shell: echo "KexAlgorithms ecdh-sha2-nistp256,ecdh-sha2-nistp384,ecdh-sha2-nistp521,diffie-hellman-group-exchange-sha256,diffie-hellman-group16-sha512,diffie-hellman-group18-sha512,diffie-hellman-group14-sha256" >> /etc/ssh/sshd_config
+
+    - name: Adding new SSH MACs entry to the [sshd_config] file
+      shell: echo "MACs hmac-sha2-256,hmac-sha2-512" >> /etc/ssh/sshd_config
+
+    # Restart SSH Service
+    - name: Restarting sshd.service on {{ ansible_fqdn }}
+      service:
+        name: sshd
+        state: restarted
+
+    # Change attributes of the ssh config file to disallow changes
+    - name: Lock the sshd configuration file
+      command: chattr +i /etc/ssh/sshd_config
