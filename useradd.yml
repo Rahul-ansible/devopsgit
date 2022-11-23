@@ -4,7 +4,8 @@
   tasks:
     - name: user add
       user:
-        name: rahul
-        comment: "Rahul Pimple"
-        password: rahul
+        name: devops
+        comment: "DevOps"
+        password: devops
+        group: wheel
         
