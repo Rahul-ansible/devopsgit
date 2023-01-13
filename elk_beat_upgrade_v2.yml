@@ -34,12 +34,12 @@
     - name: Set target beats version for deployment based on OS version 6 or less
       set_fact:
         beats_version: "{{rhel6_version}}"
-      when: ( ansible_distribution == "RedHat" and ansible_distribution_major_version <= "6" )
+      when: ( ansible_distribution == "CentOS" and ansible_distribution_major_version <= "6" )
       
     - name: Set target beats version for deployment based on OS version 7 or greater
       set_fact:
         beats_version: "{{rhel7_version}}"
-      when: ( ansible_distribution == "RedHat" and ansible_distribution_major_version >= "7" )
+      when: ( ansible_distribution == "CentOS" and ansible_distribution_major_version >= "7" )
       
     - name: Get timestamp from the system
       shell: "date +%Y-%m-%d%H-%M-%S"
