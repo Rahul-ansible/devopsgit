@@ -50,7 +50,7 @@
         time_stamp: "{{tstamp.stdout}}"
     - name: Set conf backup file name
       set_fact:
-        conf_backup_file: "/etc/{{ service_name }}/{{ service_name }}.yml_backup_ansible_before_rpm_upgrade_{{ beats_version }}_{{time_stamp}}"
+        conf_backup_file: "/etc/{{ service_name }}{{ service_name }}.yml_backup_ansible_before_rpm_upgrade_{{ beats_version }}_{{time_stamp}}"
 
     - name: "Create directory if not exists {{rpm_path}}"
       file:
@@ -65,7 +65,7 @@
 
     - name: "Copy the RPM file for OS"
       ansible.builtin.copy:
-       src: "{{ ansible_rpm_path }}/{{service_name}}-{{beats_version}}-x86_64.rpm"
+       src: "{{ ansible_rpm_path }}{{service_name}}-{{beats_version}}-x86_64.rpm"
        dest: "{{ rpm_path }}"
 
     - name: Ensure beat is running on node
