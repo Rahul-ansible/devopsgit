@@ -24,6 +24,10 @@
     #conf_backup_file: "/etc/{{ service_name }}/{{ service_name }}.yml_backup_ansible_before_rpm_upgrade_{{ beats_version }}"
 
   tasks:
+    - name: Check if "{{ service_name }}" is running...
+      command: "service '{{ service_name }}' status"
+      register: service_status
+      
     - name: Fetching System details
       debug: msg="{{ item }}"
       with_items:
