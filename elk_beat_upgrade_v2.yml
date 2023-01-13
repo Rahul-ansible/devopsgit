@@ -25,7 +25,7 @@
 
   tasks:
     - name: Check if "{{ service_name }}" is running...
-      command: "service '{{ service_name }}' status"
+      command: 'service "{{ service_name }}" status'
       register: service_status
       
     - name: Fetching System details
