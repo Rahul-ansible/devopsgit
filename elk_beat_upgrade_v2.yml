@@ -1,0 +1,177 @@
+---
+- name: ELK Beats upgrade
+  hosts: all
+  gather_facts: yes
+  become: yes
+  #ignore_errors: yes
+  vars_files:
+    # - ''
+    
+    #filebeat-7.15.1-x86_64.rpm Package must follow this naming convention only
+    #filebeat-8.0.0-x86_64.rpm
+  vars:
+    service_name: filebeat
+    rhel6_version: "7.15.1"
+    rhel7_version: "8.0.0"
+    ansible_rpm_path: "/var/tmp/rpms/" #Local rpm path
+    rpm_path: "/var/tmp/beats_rpms" # Remote rpm path where rpm will be copied
+    temp_bkp_path: "/var/tmp/beats_bkp" # Location where backup of config is stored
+    ls_port: 5044
+    backup_path:
+      - "/etc/{{ service_name }}"
+    beats_conf_file:
+      - /etc/{{ service_name }}/{{ service_name }}.yml
+    #conf_backup_file: "/etc/{{ service_name }}/{{ service_name }}.yml_backup_ansible_before_rpm_upgrade_{{ beats_version }}"
+
+  tasks:
+    - name: Fetching System details
+      debug: msg="{{ item }}"
+      with_items:
+       - "OS distribution : {{ ansible_distribution }}"
+       - "OS distribution version :  {{ ansible_distribution_version }}"
+       - "OS Major version : {{ ansible_distribution_major_version }}"
+       
+    - name: Set target beats version for deployment based on OS version 6 or less
+      set_fact:
+        beats_version: "{{rhel6_version}}"
+      when: ( ansible_distribution == "RedHat" and ansible_distribution_major_version <= "6" )
+      
+    - name: Set target beats version for deployment based on OS version 7 or greater
+      set_fact:
+        beats_version: "{{rhel7_version}}"
+      when: ( ansible_distribution == "RedHat" and ansible_distribution_major_version >= "7" )
+      
+    - name: Get timestamp from the system
+      shell: "date +%Y-%m-%d%H-%M-%S"
+      register: tstamp
+
+    - name: Setting timestamp
+      set_fact:
+        time_stamp: "{{tstamp.stdout}}"
+    - name: Set conf backup file name
+      set_fact:
+        conf_backup_file: "/etc/{{ service_name }}/{{ service_name }}.yml_backup_ansible_before_rpm_upgrade_{{ beats_version }}_{{time_stamp}}"
+
+    - name: "Create directory if not exists {{rpm_path}}"
+      file:
+        path: "{{ item }}"
+        state: directory
+        group: root
+        owner: root
+        mode: '0755'
+      loop:
+        - "{{rpm_path}}"
+        - "{{temp_bkp_path}}"
+
+    - name: "Copy the RPM file for OS"
+      ansible.builtin.copy:
+       src: "{{ ansible_rpm_path }}/{{service_name}}-{{beats_version}}-x86_64.rpm"
+       dest: "{{ rpm_path }}"
+
+    - name: Ensure beat is running on node
+      service:
+        name: "{{ service_name }}"
+        enabled: yes
+        state: started
+      register: response
+
+    - name: Get the facts of all packages
+      package_facts:
+        manager: "auto"
+      register: packages_facts_reg
+
+    - name: Display Current Beat Version
+      debug:
+        msg: "{{ item }} Installed Version: {{ ansible_facts.packages[item][0]['version'] }}"
+      loop: "{{ ansible_facts.packages | list | select('search',service_name)|list}}"
+      when: not packages_facts_reg is skipped
+
+    - name: Determiningn the current {{service_name}} version
+      set_fact:
+        pkg_version: "{{ ansible_facts.packages[item][0]['version'] }}"
+      loop: "{{ ansible_facts.packages | list | select('search',service_name)|list}}"
+      when: not packages_facts_reg is skipped
+      register: set_fact_pkg_ver
+
+    - debug:
+        msg: "{{ pkg_version }} is lower or equal than {{ beats_version }}"
+      when: beats_version is version(pkg_version, '>=')
+
+    - debug:
+        msg: "{{ pkg_version }} is greater or equal than {{ beats_version }}"
+      when: beats_version is version(pkg_version, '<=')
+      
+
+    - name: "Taking backup of current backup_path"
+      archive:
+        path: "{{ item }}"
+        dest: "{{ temp_bkp_path }}/{{service_name}}_{{pkg_version}}_{{time_stamp}}.tar.zip"
+        format: zip
+      loop: "{{ backup_path }}"
+      when: beats_version is version(pkg_version, operator='gt', strict=True)
+
+    - name: Stop service on node
+      service:
+         name: "{{ service_name }}"
+         enabled: yes
+         state: stopped
+      register: response
+      when: beats_version is version(pkg_version, operator='gt', strict=True)
+
+    - name: Upgrade/Install package
+      yum:
+        name: "{{ rpm_path }}/{{service_name}}-{{beats_version}}-x86_64.rpm"
+        state: present
+      retries: 5
+      register: upgrade_stat
+      ignore_errors: yes
+      when: beats_version is version(pkg_version, operator='gt', strict=True)
+
+    - name: Restart {{service_name}} on node after upgrade
+      service:
+        name: "{{ service_name }}"
+        enabled: yes
+        state: started
+        daemon_reload: yes
+      register: result
+      when: upgrade_stat is changed
+    - debug : var=result
+
+# check beat service is exist
+    - name: Check if {{service_name}} Service Exist
+      stat: path=/etc/init.d/{{service_name}}
+      register: service_status
+      when: upgrade_stat is not changed
+
+    - name: If it exists start beat service wait for it to get active
+      service:
+         name: "{{ service_name }}"
+         state: restarted
+         daemon_reload: yes
+      register: pre_ver_running
+      until: pre_ver_running.status.ActiveState == "active"
+      retries: 15
+      delay: 20
+      when: upgrade_stat is not changed
+
+    - debug : var=pre_ver_running
+
+    #  If beats service not found ROLL_BACK 
+# Sathish to add task for copying
+    - name: If not active/service not found  copy filebeat 
+      yum:
+        name: "{{ rpm_path }}/{{service_name}}-{{pkg_version}}-x86_64.rpm"
+        state: present
+      retries: 5
+      register: rollback
+      when: pre_ver_running is not changed
+
+    - name: Restart filebeat on node after rollback
+      service:
+        name: "{{ service_name }}"
+        enabled: yes
+        state: restarted
+      register: response
+      when: rollback is changed
+
+    - debug : var=response
