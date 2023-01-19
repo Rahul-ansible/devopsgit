@@ -1,0 +1,301 @@
+---
+- name: Playbook for ELK Beats upgrade
+  hosts: all
+  gather_facts: yes
+  become: yes
+# ignore_errors: yes
+  vars_files:
+    #filebeat-7.15.1-x86_64.rpm Package must follow this naming convention only
+    #filebeat-8.0.0-x86_64.rpm
+  vars:
+    service_name: filebeat
+    rhel6_version: "7.15.1"
+    rhel7_version: "8.0.0"
+    ansible_rpm_path: "/var/tmp/rpms" #Local rpm path
+    rpm_path: "/var/tmp/beats_rpms" # Remote rpm path where rpm will be copied
+    temp_bkp_path: "/var/tmp/beats_bkp" # Location where backup of config is stored
+    backup_path: "/etc/{{ service_name }}"
+    beats_conf_file: /etc/{{ service_name }}/{{ service_name }}.yml
+    #conf_backup_file: "/etc/{{ service_name }}/{{ service_name }}.yml_backup_ansible_before_rpm_upgrade_{{ beats_version }}"
+    job_success_count: 0
+    job_fail_count: 0
+    job_note: []
+    incomplete_flag: false
+    timeStamp: "{{ lookup('pipe','TZ=Asia/Singapore date') }}" # timestamp for logging processes
+    host_zone: "intranet"
+
+
+  tasks:
+    - name: Check  {{service_name}}  service_status
+      command: "service {{service_name}} status"
+      register: service_status
+      ignore_errors: true
+
+    - name: Log if service {{service_name}} is running on remote node.
+      set_fact:
+        job_note: "{{job_note}} + [ '{{ timeStamp }}: [{{ inventory_hostname }}]: PRECHECK - {{  service_name }} running on remote node']"
+      when: service_status.rc | default('') == 0
+      tags:
+        - always
+
+    - name: Get the facts of all packages
+      package_facts:
+          manager: "auto"
+      register: packages_facts_reg
+
+    - name: Display Current {{service_name}} Version.
+      debug:
+        msg: "{{ item }} Installed Version: {{ ansible_facts.packages[item][0]['version'] }}"
+      loop: "{{ ansible_facts.packages | list | select('search',service_name)|list}}"
+
+
+    - name: Determining the current {{service_name}} version.
+      set_fact:
+        pkg_version: "{{ ansible_facts.packages[item][0]['version'] }}"
+      loop: "{{ ansible_facts.packages | list | select('search',service_name)|list}}"
+      register: set_fact_pkg_ver
+
+    - name: Display message and halt the upgradation if there is no {{service_name}} package installed on remote node.
+      block:   
+        - name: Display message if there is no package installed on the node.
+          debug:
+            msg: "The service {{service_name}} is not installed on the node"
+
+        - name: Log if there is no {{service_name}} installed on the node.
+          set_fact:
+            job_note: "{{job_note}} + [ '{{ timeStamp }}: [{{ inventory_hostname }}]: HALTED - package {{service_name}} is not installed on the node , server will be skipped for upgradation..']"
+
+        - name: Halt the upgradation Process if there is no {{service_name}} installed.
+          meta: end_play
+      when: pkg_version is not defined or pkg_version == ""
+
+    - name: Set target beats version for deployment based on OS version 6 or less.
+      set_fact:
+        beats_version: "{{rhel6_version}}"
+      when: ( ansible_distribution == "CentOS" and ansible_distribution_major_version <= "6" )
+
+    - name: Set target beats version for deployment based on OS version 7 or greater.
+      set_fact:
+        beats_version: "{{rhel7_version}}"
+      when: ( ansible_distribution == "CentOS" and ansible_distribution_major_version >= "7" )
+
+    - name: perform upgradation if {{service_name}} is running.
+      block:
+        - name: Fetching OS details from remote node.
+          debug: msg="{{ item }}"
+          with_items:
+            - "OS distribution : {{ ansible_distribution }}"
+            - "OS distribution version :  {{ ansible_distribution_version }}"
+            - "OS Major version : {{ ansible_distribution_major_version }}"
+
+
+        - name: Get timestamp from nodes.
+          shell: "date +%Y-%m-%d%H-%M-%S"
+          register: tstamp
+
+        - name: Set timestamp in set_fact.
+          set_fact:
+            time_stamp: "{{tstamp.stdout}}"
+
+        - name: Set conf backup file name
+          set_fact:
+            conf_backup_file: "/etc/{{ service_name }}/{{ service_name }}.yml_backup_ansible_before_rpm_upgrade_{{ beats_version }}_{{time_stamp}}"
+
+        - name: "Create directory if not exists {{rpm_path}}"
+          file:
+            path: "{{ item }}"
+            state: directory
+            group: root
+            owner: root
+            mode: '0755'
+          register: dir
+          loop:
+            - "{{rpm_path}}"
+            - "{{temp_bkp_path}}"
+
+        - name: Log if directory created on remote node.
+          set_fact:
+            job_note: "{{job_note}} + [ '{{ timeStamp }}: [{{ inventory_hostname }}]: Directory created on remote node']"
+          when: dir.rc | default('') == 0
+
+        - name: "Copy the RPM file to remote path"
+          copy:
+            src: "{{ ansible_rpm_path }}/{{service_name}}-{{beats_version}}-x86_64.rpm"
+            dest: "{{ rpm_path }}"
+          register: copy_rpm
+
+        - name: Log if RPM package is copied on remote node.
+          set_fact:
+            job_note: "{{job_note}} + [ '{{ timeStamp }}: [{{ inventory_hostname }}]: RPM package {{service_name}}-{{beats_version}}-x86_64.rpm copied on remote node']"
+          when: copy_rpm.rc | default('') == 0
+
+        - name: Ensure beat is running on node
+          service:
+            name: "{{ service_name }}"
+            enabled: yes
+            state: started
+          register: response
+
+        - name: Get the facts of all packages from node.
+          package_facts:
+            manager: "auto"
+          register: packages_facts_reg
+
+        - name: Display Current installed Beat Version on node.
+          debug:
+            msg: "{{ item }} Installed Version: {{ ansible_facts.packages[item][0]['version'] }}"
+          loop: "{{ ansible_facts.packages | list | select('search',service_name)|list}}"
+          when: not packages_facts_reg is skipped
+
+        - name: Determining the current {{service_name}} version.
+          set_fact:
+            pkg_version: "{{ ansible_facts.packages[item][0]['version'] }}"
+          loop: "{{ ansible_facts.packages | list | select('search',service_name)|list}}"
+          when: not packages_facts_reg is skipped
+          register: set_fact_pkg_ver
+
+        - debug:
+            msg: "{{ pkg_version }} is lower or equal than {{ beats_version }}"
+          when: beats_version is version(pkg_version, '>=')
+
+        - debug:
+            msg: "{{ pkg_version }} is greater or equal than {{ beats_version }}"
+          when: beats_version is version(pkg_version, '<=')
+
+        - name: Take a Config Back up and upgrade.
+          block:
+            - name: "Taking backup of current backup_path"
+              archive:
+                path: "{{ backup_path }}"
+                dest: "{{ temp_bkp_path }}/{{service_name}}_{{pkg_version}}_{{time_stamp}}.tar.zip"
+                format: zip
+              register: conf_bkp
+
+            - name: Log if config backeup done on remote node.
+              set_fact:
+                job_note: "{{job_note}} + [ '{{ timeStamp }}: [{{ inventory_hostname }}]: Config backeup taken and stored at {{ temp_bkp_path }} on remote node']"
+              when: conf_bkp.rc | default('') == 0
+
+            - name: Stop {{service_name}} service on node.
+              service:
+                name: "{{ service_name }}"
+                enabled: yes
+                state: stopped
+              register: response
+
+            - name: Log if {{service_name}} service stopped on node.
+              set_fact:
+                job_note: "{{job_note}} + [ '{{ timeStamp }}: [{{ inventory_hostname }}]: {{service_name}} service stopped successfully on node ']"
+              when: conf_bkp.rc | default('') == 0
+
+            - name: Upgrade/Install {{service_name}} package
+              yum:
+                name: "{{ rpm_path }}/{{service_name}}-{{beats_version}}-x86_64.rpm"
+                state: present
+              retries: 5
+              register: upgrade_stat
+              ignore_errors: yes
+          when: beats_version is version(pkg_version, operator='gt', strict=True)
+
+        - name: Log if {{service_name}} service installed on node.
+          set_fact:
+            job_note: "{{job_note}} + [ '{{ timeStamp }}: [{{ inventory_hostname }}]: {{service_name}}-{{beats_version}}-x86_64.rpm  installed successfully on node ']"
+          when: upgrade_stat.rc | default('') == 0
+
+        - name: Start {{service_name}} on node after upgrade.
+          service:
+            name: "{{ service_name }}"
+            enabled: yes
+            state: started
+            daemon_reload: yes
+          register: result
+          when: upgrade_stat is changed
+
+        - name: Log if {{service_name}} service started on node.
+          set_fact:
+            job_note: "{{job_note}} + [ '{{ timeStamp }}: [{{ inventory_hostname }}]: {{service_name}} started successfully on node ']"
+          when: result.rc | default('') == 0
+
+        #  If {{service_name}} upgrade fail start  ROLL_BACK
+
+        - name: Rollback to {{pkg_version}} (old) version if upgradation failed.
+          block:
+            - name: "Copy the old RPM {{pkg_version}} file to Remote path "
+              copy:
+                src: "{{ ansible_rpm_path }}/{{service_name}}-{{pkg_version}}-x86_64.rpm"
+                dest: "{{ rpm_path }}"
+              register: old_rpm_copy
+            - name: Log if old RPM {{pkg_version}} file copied to Remote path on node.
+              set_fact:
+                job_note: "{{job_note}} + [ '{{ timeStamp }}: [{{ inventory_hostname }}]: old RPM {{service_name}}-{{pkg_version}}-x86_64.rpm copied to Remote path on node ']"
+              when: old_rpm_copy.rc | default('') == 0
+
+            - name: rollback {{service_name}} service on node
+              yum:
+                name: "{{ rpm_path }}/{{service_name}}-{{pkg_version}}-x86_64.rpm"
+                state: present
+              retries: 5
+              register: rollback
+
+            - name: Log if old RPM {{pkg_version}} installed on node.
+              set_fact:
+                job_note: "{{job_note}} + [ '{{ timeStamp }}: [{{ inventory_hostname }}]: old RPM {{service_name}}-{{pkg_version}}-x86_64.rpm is installed on node successfully']"
+              when: rollback.rc | default('') == 0
+
+          when: upgrade_stat is not changed
+
+        - name: Restart {{service_name}} on node
+          service:
+            name: "{{ service_name }}"
+            enabled: yes
+            state: restarted
+          register: rollback_response
+          when: rollback is changed
+
+        - name: Log if {{service_name}} service started on node.
+          set_fact:
+            job_note: "{{job_note}} + [ '{{ timeStamp }}: [{{ inventory_hostname }}]: {{service_name}} started successfully on node ']"
+          when: rollback_response.rc | default('') == 0
+
+        - debug : var=rollback_response
+      when:  service_status.rc | default('') == 0 and pkg_version < beats_version
+
+    - name: Display Consolidated Report.
+      tags: always
+      block:
+        - name: Consolidate the final report - forloop
+          debug:
+            msg: >-
+              {% for item in job_note %}
+               LOG: {{ item }}
+              {% endfor %}
+
+        - name: Consolidate the final report  - join
+          debug:
+            msg: "{{ job_note | join('\n') }}"
+
+        - name: Consolidate the final report - json
+          debug:
+            msg: "{{ job_note | to_nice_json }}"
+
+        - name: Consolidate the final report - json with indent
+          debug:
+            msg: "{{ job_note | to_nice_json(indent=2) }}"
+
+        - name: Consolidate the final report - yaml
+          debug:
+            msg: "{{ job_note | to_nice_yaml }}"
+
+        - name: Processing job results
+          set_fact:
+            job_results:
+              key: "{{ inventory_hostname }}"
+              value:
+                job_success_count: "{{ job_success_count|int }}"
+                job_fail_count: "{{ job_fail_count|int }}"
+                job_note: "{{ job_note }}"
+                incomplete_flag: "{{ incomplete_flag|bool }}"
+
+        - name: Printing job status
+          debug:
+            msg: "{{ job_results}}"
