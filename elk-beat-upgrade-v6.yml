@@ -3,7 +3,7 @@
   hosts: all
   gather_facts: yes
   become: yes
-# ignore_errors: yes
+  ignore_errors: yes
   vars_files:
     #filebeat-7.15.1-x86_64.rpm Package must follow this naming convention only
     #filebeat-8.0.0-x86_64.rpm
@@ -37,7 +37,7 @@
     - name: Log if service {{service_name}} is running on remote node.
       set_fact:
         job_note: "{{job_note}} + [ '[{{ inventory_hostname }}]: PRECHECK - {{  service_name }} running on remote node']"
-      when: service_status.rc | default('') == 0
+      when: service_status.rc | default('') != 0
       tags:
         - always
 
@@ -57,6 +57,10 @@
         pkg_version: "{{ ansible_facts.packages[item][0]['version'] }}"
       loop: "{{ ansible_facts.packages | list | select('search',service_name)|list}}"
       register: set_fact_pkg_ver
+      
+    - name: Log the installed  {{service_name}} version on the node.
+      set_fact:
+        job_note: "{{job_note}} + [ '[{{ inventory_hostname }}]: Installed package {{service_name}} version is {{ pkg_version }}']"
 
     - name: Display message and halt the upgradation if there is no {{service_name}} package installed on remote node.
       block:   
@@ -111,7 +115,7 @@
         - name: Log if directory created on remote node.
           set_fact:
             job_note: "{{job_note}} + [ '[{{ inventory_hostname }}]: Directory created on remote node']"
-          when: dir.rc | default('') == 0
+          when: dir.rc | default('') != 0
 
         - name: "Copy the RPM file to remote path"
           copy:
@@ -122,7 +126,7 @@
         - name: Log if RPM package is copied on remote node.
           set_fact:
             job_note: "{{job_note}} + [ '[{{ inventory_hostname }}]: RPM package {{service_name}}-{{beats_version}}-x86_64.rpm copied on remote node']"
-          when: copy_rpm.rc | default('') == 0
+          when: copy_rpm.rc | default('') != 0
 
         - name: Ensure beat is running on node
           service:
@@ -169,7 +173,7 @@
             - name: Log if config backeup done on remote node.
               set_fact:
                 job_note: "{{job_note}} + [ '[{{ inventory_hostname }}]: Config backeup taken and stored at {{ temp_bkp_path }} on remote node']"
-              when: conf_bkp.rc | default('') == 0
+              when: conf_bkp.rc | default('') != 0
 
             - name: Stop {{service_name}} service on node.
               service:
@@ -181,7 +185,7 @@
             - name: Log if {{service_name}} service stopped on node.
               set_fact:
                 job_note: "{{job_note}} + [ '[{{ inventory_hostname }}]: {{service_name}} service stopped successfully on node ']"
-              when: service_stop.rc | default('') == 0
+              when: service_stop.rc | default('') != 0
 
             - name: Upgrade/Install {{service_name}} package
               yum:
@@ -195,7 +199,7 @@
         - name: Log if {{service_name}} service installed on node.
           set_fact:
             job_note: "{{job_note}} + ['[{{ inventory_hostname }}]: {{service_name}}-{{beats_version}}-x86_64.rpm  installed successfully on node ']"
-          when: upgrade_stat.rc | default('') == 0
+          when: upgrade_stat.rc | default('') != 0
 
         - name: Start {{service_name}} on node after upgrade.
           service:
@@ -209,7 +213,7 @@
         - name: Log if {{service_name}} service started on node.
           set_fact:
             job_note: "{{job_note}} + [ '[{{ inventory_hostname }}]: {{service_name}} started successfully on node ']"
-          when: service_start.rc | default('') == 0
+          when: service_start.rc | default('') != 0
 
         #  If {{service_name}} upgrade fail start  ROLL_BACK
 
@@ -223,7 +227,7 @@
             - name: Log if old RPM {{pkg_version}} file copied to Remote path on node.
               set_fact:
                 job_note: "{{job_note}} + ['[{{ inventory_hostname }}]: old RPM {{service_name}}-{{pkg_version}}-x86_64.rpm copied to Remote path on node ']"
-              when: old_rpm_copy.rc | default('') == 0
+              when: old_rpm_copy.rc | default('') != 0
 
             - name: rollback {{service_name}} service on node
               yum:
@@ -235,7 +239,7 @@
             - name: Log if old RPM {{pkg_version}} installed on node.
               set_fact:
                 job_note: "{{job_note}} + [ '[{{ inventory_hostname }}]: old RPM {{service_name}}-{{pkg_version}}-x86_64.rpm is installed on node successfully']"
-              when: rollback.rc | default('') == 0
+              when: rollback.rc | default('') != 0
 
           when: upgrade_stat is not changed
 
@@ -250,43 +254,12 @@
         - name: Log if {{service_name}} service started on node.
           set_fact:
             job_note: "{{job_note}} + [ '[{{ inventory_hostname }}]: {{service_name}} started successfully on node ']"
-          when: rollback_response.rc | default('') == 0
+          when: rollback_response.rc | default('') != 0
 
-      when:  service_status.rc | default('') == 0 and pkg_version < beats_version
+      when:  service_status.rc | default('') != 0 and pkg_version < beats_version
 
     - name: Display Consolidated Report.
       tags: always
-      block:
-        - name: Consolidate the final report - forloop
-          debug:
-            msg: >-
-              {% for item in job_note %}
-               LOG: {{ item }}
-              {% endfor %}
+      debug:
+        msg: "{{ job_note}}"
 
-        - name: Consolidate the final report  - join
-          debug:
-            msg: "{{ job_note | join('\n') }}"
-
-        - name: Consolidate the final report - json
-          debug:
-            msg: "{{ job_note | to_nice_json }}"
-
-        - name: Consolidate the final report - json with indent
-          debug:
-            msg: "{{ job_note | to_nice_json(indent=2) }}"
-
-        - name: Consolidate the final report - yaml
-          debug:
-            msg: "{{ job_note | to_nice_yaml }}"
-
-        - name: Processing job results
-          set_fact:
-            job_results:
-              key: "{{ inventory_hostname }}"
-              value:
-                job_note: "{{ job_note }}"
-
-        - name: Printing job status
-          debug:
-            msg: "{{ job_results}}"
