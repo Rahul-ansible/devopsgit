@@ -13,19 +13,26 @@
     rhel7_version: "8.0.0"
     ansible_rpm_path: "/var/tmp/rpms" #Local rpm path
     rpm_path: "/var/tmp/beats_rpms" # Remote rpm path where rpm will be copied
-    temp_bkp_path: "/var/tmp/beats_bkp" # Location where backup of config is stored
-    backup_path: "/etc/{{ service_name }}"
-    beats_conf_file: /etc/{{ service_name }}/{{ service_name }}.yml
-    #conf_backup_file: "/etc/{{ service_name }}/{{ service_name }}.yml_backup_ansible_before_rpm_upgrade_{{ beats_version }}"
+    temp_bkp_path: "/var/tmp/beats_bkp" # Location where backup of config is stored on remote node
+    backup_path: "/etc/{{ service_name }}"  # service config path
+    beats_conf_file: /etc/{{ service_name }}/{{ service_name }}.yml  # Service config file path
     job_success_count: 0
     job_fail_count: 0
     job_note: []
     incomplete_flag: false
-    timeStamp: "{{ lookup('pipe','TZ=Asia/Singapore date') }}" # timestamp for logging processes
+    #timeStamp: "{{ lookup('pipe','TZ=Asia/Singapore date') }}" # timestamp for logging processes
     host_zone: "intranet"
 
 
   tasks:
+    - name: Get timestamp from nodes.
+      shell: "date +%Y-%m-%d%H-%M-%S"
+      register: tstamp
+
+    - name: Set timestamp in set_fact.
+      set_fact:
+        time_stamp: "{{tstamp.stdout}}"
+  
     - name: Check  {{service_name}}  service_status
       command: "service {{service_name}} status"
       register: service_status
@@ -33,7 +40,7 @@
 
     - name: Log if service {{service_name}} is running on remote node.
       set_fact:
-        job_note: "{{job_note}} + [ '{{ timeStamp }}: [{{ inventory_hostname }}]: PRECHECK - {{  service_name }} running on remote node']"
+        job_note: "{{job_note}} + [ '{{ time_stamp }}: [{{ inventory_hostname }}]: PRECHECK - {{  service_name }} running on remote node']"
       when: service_status.rc | default('') == 0
       tags:
         - always
@@ -63,7 +70,7 @@
 
         - name: Log if there is no {{service_name}} installed on the node.
           set_fact:
-            job_note: "{{job_note}} + [ '{{ timeStamp }}: [{{ inventory_hostname }}]: HALTED - package {{service_name}} is not installed on the node , server will be skipped for upgradation..']"
+            job_note: "{{job_note}} + [ '{{ time_stamp }}: [{{ inventory_hostname }}]: HALTED - package {{service_name}} is not installed on the node , server will be skipped for upgradation..']"
 
         - name: Halt the upgradation Process if there is no {{service_name}} installed.
           meta: end_play
@@ -89,14 +96,6 @@
             - "OS Major version : {{ ansible_distribution_major_version }}"
 
 
-        - name: Get timestamp from nodes.
-          shell: "date +%Y-%m-%d%H-%M-%S"
-          register: tstamp
-
-        - name: Set timestamp in set_fact.
-          set_fact:
-            time_stamp: "{{tstamp.stdout}}"
-
         - name: Set conf backup file name
           set_fact:
             conf_backup_file: "/etc/{{ service_name }}/{{ service_name }}.yml_backup_ansible_before_rpm_upgrade_{{ beats_version }}_{{time_stamp}}"
@@ -115,7 +114,7 @@
 
         - name: Log if directory created on remote node.
           set_fact:
-            job_note: "{{job_note}} + [ '{{ timeStamp }}: [{{ inventory_hostname }}]: Directory created on remote node']"
+            job_note: "{{job_note}} + [ '{{ time_stamp }}: [{{ inventory_hostname }}]: Directory created on remote node']"
           when: dir.rc | default('') == 0
 
         - name: "Copy the RPM file to remote path"
@@ -126,7 +125,7 @@
 
         - name: Log if RPM package is copied on remote node.
           set_fact:
-            job_note: "{{job_note}} + [ '{{ timeStamp }}: [{{ inventory_hostname }}]: RPM package {{service_name}}-{{beats_version}}-x86_64.rpm copied on remote node']"
+            job_note: "{{job_note}} + [ '{{ time_stamp }}: [{{ inventory_hostname }}]: RPM package {{service_name}}-{{beats_version}}-x86_64.rpm copied on remote node']"
           when: copy_rpm.rc | default('') == 0
 
         - name: Ensure beat is running on node
@@ -173,7 +172,7 @@
 
             - name: Log if config backeup done on remote node.
               set_fact:
-                job_note: "{{job_note}} + [ '{{ timeStamp }}: [{{ inventory_hostname }}]: Config backeup taken and stored at {{ temp_bkp_path }} on remote node']"
+                job_note: "{{job_note}} + [ '{{ time_stamp }}: [{{ inventory_hostname }}]: Config backeup taken and stored at {{ temp_bkp_path }} on remote node']"
               when: conf_bkp.rc | default('') == 0
 
             - name: Stop {{service_name}} service on node.
@@ -185,7 +184,7 @@
 
             - name: Log if {{service_name}} service stopped on node.
               set_fact:
-                job_note: "{{job_note}} + [ '{{ timeStamp }}: [{{ inventory_hostname }}]: {{service_name}} service stopped successfully on node ']"
+                job_note: "{{job_note}} + [ '{{ time_stamp }}: [{{ inventory_hostname }}]: {{service_name}} service stopped successfully on node ']"
               when: conf_bkp.rc | default('') == 0
 
             - name: Upgrade/Install {{service_name}} package
@@ -199,7 +198,7 @@
 
         - name: Log if {{service_name}} service installed on node.
           set_fact:
-            job_note: "{{job_note}} + [ '{{ timeStamp }}: [{{ inventory_hostname }}]: {{service_name}}-{{beats_version}}-x86_64.rpm  installed successfully on node ']"
+            job_note: "{{job_note}} + [ '{{ time_stamp }}: [{{ inventory_hostname }}]: {{service_name}}-{{beats_version}}-x86_64.rpm  installed successfully on node ']"
           when: upgrade_stat.rc | default('') == 0
 
         - name: Start {{service_name}} on node after upgrade.
@@ -213,7 +212,7 @@
 
         - name: Log if {{service_name}} service started on node.
           set_fact:
-            job_note: "{{job_note}} + [ '{{ timeStamp }}: [{{ inventory_hostname }}]: {{service_name}} started successfully on node ']"
+            job_note: "{{job_note}} + [ '{{ time_stamp }}: [{{ inventory_hostname }}]: {{service_name}} started successfully on node ']"
           when: result.rc | default('') == 0
 
         #  If {{service_name}} upgrade fail start  ROLL_BACK
@@ -227,7 +226,7 @@
               register: old_rpm_copy
             - name: Log if old RPM {{pkg_version}} file copied to Remote path on node.
               set_fact:
-                job_note: "{{job_note}} + [ '{{ timeStamp }}: [{{ inventory_hostname }}]: old RPM {{service_name}}-{{pkg_version}}-x86_64.rpm copied to Remote path on node ']"
+                job_note: "{{job_note}} + [ '{{ time_stamp }}: [{{ inventory_hostname }}]: old RPM {{service_name}}-{{pkg_version}}-x86_64.rpm copied to Remote path on node ']"
               when: old_rpm_copy.rc | default('') == 0
 
             - name: rollback {{service_name}} service on node
@@ -239,7 +238,7 @@
 
             - name: Log if old RPM {{pkg_version}} installed on node.
               set_fact:
-                job_note: "{{job_note}} + [ '{{ timeStamp }}: [{{ inventory_hostname }}]: old RPM {{service_name}}-{{pkg_version}}-x86_64.rpm is installed on node successfully']"
+                job_note: "{{job_note}} + [ '{{ time_stamp }}: [{{ inventory_hostname }}]: old RPM {{service_name}}-{{pkg_version}}-x86_64.rpm is installed on node successfully']"
               when: rollback.rc | default('') == 0
 
           when: upgrade_stat is not changed
@@ -254,7 +253,7 @@
 
         - name: Log if {{service_name}} service started on node.
           set_fact:
-            job_note: "{{job_note}} + [ '{{ timeStamp }}: [{{ inventory_hostname }}]: {{service_name}} started successfully on node ']"
+            job_note: "{{job_note}} + [ '{{ time_stamp }}: [{{ inventory_hostname }}]: {{service_name}} started successfully on node ']"
           when: rollback_response.rc | default('') == 0
 
         - debug : var=rollback_response
