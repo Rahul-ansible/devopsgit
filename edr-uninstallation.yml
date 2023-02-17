@@ -1,0 +1,32 @@
+---
+- name: Playbook for EDR agent un-installations
+  hosts: all
+  become: yes
+  ignore_errors: true
+  vars:
+    service_name: xagt
+
+  tasks:
+    - name: "Check {{ service_name }} service status"
+      command: "service {{ service_name }} status"
+      register: pre_service_status
+
+    - name: "Stop {{ service_name }} service on remote node" 
+      command: "service {{ service_name }} stop"
+      register: service_stop
+      when: pre_service_status.rc == 0
+
+    - name: "Uninstall the {{ service_name }} package"
+      command: "rpm -e {{ service_name }}"
+      register: uninstall_stat
+
+    - name: "Check {{ service_name }} service status"
+      command: "service {{ service_name }} status"
+      register: post_service_status
+ 
+    - debug: var=post_service_status
+
+    - name: "Display {{ service_name }} service status"
+      debug: 
+        msg: "{{ service_name }} service succeffully uninstalled"
+      when: uninstall_stat.rc == 0
